@@ -1,0 +1,588 @@
+// prisma/schema.prisma
+// VYV Fleet Manager — Harmonie Ambulance
+// PostgreSQL + Prisma ORM
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────────
+
+enum VehicleCategory {
+  AMBULANCE_A
+  AMBULANCE_B
+  VSL
+  TPMR
+  TAXI
+  SERVICE
+}
+
+enum VehicleStatus {
+  ACTIVE
+  MAINTENANCE
+  IMMOBILIZED
+  SOLD
+}
+
+enum Energy {
+  DIESEL
+  HYBRID
+  ELECTRIC
+  GASOLINE
+}
+
+enum MaintenanceType {
+  PREVENTIVE
+  CORRECTIVE
+  REGULATORY
+  SANITAIRE
+}
+
+enum MaintenanceStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum IncidentType {
+  ACCIDENT
+  THEFT
+  VANDALISM
+  BREAKDOWN
+}
+
+enum IncidentSeverity {
+  CRITICAL
+  MAJOR
+  MINOR
+}
+
+enum IncidentStatus {
+  OPEN
+  IN_PROGRESS
+  CLOSED
+}
+
+enum FuelType {
+  DIESEL
+  HYBRID
+  ELECTRIC
+}
+
+enum EquipmentCategory {
+  STRETCHER
+  DEFIBRILLATOR
+  OXYGEN
+  RADIO
+  GPS
+  FIRST_AID
+  OTHER
+}
+
+enum EquipmentStatus {
+  OK
+  WARNING
+  CRITICAL
+  OUT_OF_SERVICE
+}
+
+enum AlertSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}
+
+enum AlertStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum AlertCategory {
+  ARS
+  CT
+  ASSURANCE
+  EQUIPEMENT
+  MAINTENANCE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  AGENCY_MANAGER
+  STANDARD
+}
+
+enum PermissionAction {
+  view
+  create
+  edit
+  delete
+}
+
+enum AppModule {
+  dashboard
+  vehicles
+  maintenance
+  compliance
+  incidents
+  drivers
+  fuel
+  equipment
+  settings
+}
+
+// ─────────────────────────────────────────────────────────────────
+// AGENCY — Agences ambulancières
+// ─────────────────────────────────────────────────────────────────
+
+model Agency {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  address   String
+  city      String
+  zipCode   String
+  phone     String?
+  email     String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  users              UserAgency[]
+  vehicles           Vehicle[]
+  drivers            Driver[]
+  maintenances       Maintenance[]
+  incidents          Incident[]
+  equipment          Equipment[]
+  fuelEntries        FuelEntry[]
+  alerts             Alert[]
+  complianceScores   ComplianceScore[]
+
+  @@index([isActive])
+  @@map("agencies")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// ROLE & PERMISSIONS
+// ─────────────────────────────────────────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  isSystem    Boolean  @default(false)
+  color       String   @default("gray")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users       User[]
+  permissions Permission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id      String           @id @default(cuid())
+  module  AppModule
+  action  PermissionAction
+  roleId  String
+
+  role    Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, module, action])
+  @@index([roleId])
+  @@map("permissions")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// USER — Utilisateurs
+// ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String    @id @default(cuid())
+  firstName    String
+  lastName     String
+  email        String    @unique
+  passwordHash String
+  roleId       String
+  isActive     Boolean   @default(true)
+  lastLogin    DateTime?
+  deletedAt    DateTime? // soft delete
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  // Relations
+  role         Role         @relation(fields: [roleId], references: [id])
+  agencies     UserAgency[]
+  refreshTokens RefreshToken[]
+
+  @@index([email])
+  @@index([roleId])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+// Table de jointure User <-> Agency (un user peut gérer plusieurs agences)
+model UserAgency {
+  userId    String
+  agencyId  String
+
+  user      User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agency    Agency @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+
+  @@id([userId, agencyId])
+  @@map("user_agencies")
+}
+
+// Refresh tokens JWT
+model RefreshToken {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([token])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// VEHICLE — Véhicules
+// ─────────────────────────────────────────────────────────────────
+
+model Vehicle {
+  id                        String          @id @default(cuid())
+  registration              String          @unique // Immatriculation
+  brand                     String
+  model                     String
+  category                  VehicleCategory
+  energy                    Energy
+  agencyId                  String
+  mileage                   Int             @default(0)
+  monthlyLeaseCost          Float?
+  arsApprovalExpiry         DateTime?       // Agrément ARS
+  insuranceExpiry           DateTime?
+  technicalInspectionExpiry DateTime?       // Contrôle technique
+  taxiMeterControlExpiry    DateTime?       // Prochain contrôle taximètre (Taxi uniquement)
+  nextMaintenanceDate       DateTime?
+  complianceScore           Int             @default(100)
+  status                    VehicleStatus   @default(ACTIVE)
+  firstRegistrationDate     DateTime?       // 1ere immatriculation (carte grise)
+  entryDate                 DateTime?       // Entree dans le parc
+  exitDate                  DateTime?       // Sortie du parc
+  
+  deletedAt                 DateTime?       // soft delete
+  createdAt                 DateTime        @default(now())
+  updatedAt                 DateTime        @updatedAt
+
+  // Relations
+  agency       Agency        @relation(fields: [agencyId], references: [id])
+  maintenances Maintenance[]
+  incidents    Incident[]
+  equipment    Equipment[]
+  fuelEntries  FuelEntry[]
+  tco          TCOEntry?
+  alerts       Alert[]
+
+  @@index([agencyId])
+  @@index([status])
+  @@index([category])
+  @@index([deletedAt])
+  @@index([insuranceExpiry])
+  @@index([technicalInspectionExpiry])
+  @@map("vehicles")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// DRIVER — Conducteurs
+// ─────────────────────────────────────────────────────────────────
+
+model Driver {
+  id                String    @id @default(cuid())
+  firstName         String
+  lastName          String
+  email             String?
+  phone             String?
+  role              String    // "Ambulancier" | "Auxiliaire ambulancier"
+  agencyId          String
+  status            String    @default("ACTIVE") // ACTIVE | SUSPENDED | LEAVE | INACTIVE
+  licenseNumber     String?
+  licenseExpiry     DateTime?
+  medicalExamDate   DateTime?
+  medicalExamExpiry DateTime?
+  deletedAt         DateTime? // soft delete
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  // Relations
+  agency    Agency     @relation(fields: [agencyId], references: [id])
+  incidents DriverIncident[]
+
+  @@index([agencyId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("drivers")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MAINTENANCE — Interventions de maintenance
+// ─────────────────────────────────────────────────────────────────
+
+model Maintenance {
+  id                   String            @id @default(cuid())
+  vehicleId            String
+  agencyId             String
+  type                 MaintenanceType
+  label                String
+  description          String?
+  scheduledDate        DateTime
+  completedDate        DateTime?
+  status               MaintenanceStatus @default(SCHEDULED)
+  provider             String?
+  estimatedCost        Float?
+  realCost             Float?
+  mileageAtMaintenance Int?
+  notes                String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  // Relations
+  vehicle  Vehicle @relation(fields: [vehicleId], references: [id])
+  agency   Agency  @relation(fields: [agencyId], references: [id])
+
+  @@index([vehicleId])
+  @@index([agencyId])
+  @@index([status])
+  @@index([scheduledDate])
+  @@index([type])
+  @@map("maintenances")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// INCIDENT — Sinistres
+// ─────────────────────────────────────────────────────────────────
+
+model Incident {
+  id                   String           @id @default(cuid())
+  vehicleId            String
+  agencyId             String
+  date                 DateTime
+  declarationDate      DateTime
+  type                 IncidentType
+  severity             IncidentSeverity
+  status               IncidentStatus   @default(OPEN)
+  description          String
+  location             String
+  driverResponsible    Boolean          @default(false)
+  injuredPersons       Int              @default(0)
+  patientInVehicle     Boolean          @default(false)
+  thirdPartyInvolved   Boolean          @default(false)
+  thirdPartyInsurance  String?
+  insuranceReference   String?
+  estimatedRepairCost  Float?
+  realRepairCost       Float?
+  immobilizationDays   Int?
+  repairProvider       String?
+  notes                String?
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  // Relations
+  vehicle Vehicle          @relation(fields: [vehicleId], references: [id])
+  agency  Agency           @relation(fields: [agencyId], references: [id])
+  drivers DriverIncident[]
+
+  @@index([vehicleId])
+  @@index([agencyId])
+  @@index([status])
+  @@index([severity])
+  @@index([date])
+  @@map("incidents")
+}
+
+// Table de jointure Driver <-> Incident
+model DriverIncident {
+  driverId   String
+  incidentId String
+
+  driver     Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  incident   Incident @relation(fields: [incidentId], references: [id], onDelete: Cascade)
+
+  @@id([driverId, incidentId])
+  @@map("driver_incidents")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// EQUIPMENT — Équipements médicaux
+// ─────────────────────────────────────────────────────────────────
+
+model Equipment {
+  id                  String            @id @default(cuid())
+  vehicleId           String
+  agencyId            String
+  label               String
+  category            EquipmentCategory
+  serialNumber        String?
+  status              EquipmentStatus   @default(OK)
+  installDate         DateTime?
+  lastCheckDate       DateTime?
+  nextCheckDate       DateTime?
+  expiryDate          DateTime?
+  maintenanceProvider String?
+  notes               String?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  agency  Agency  @relation(fields: [agencyId], references: [id])
+
+  @@index([vehicleId])
+  @@index([agencyId])
+  @@index([status])
+  @@index([category])
+  @@index([nextCheckDate])
+  @@map("equipment")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// FUEL ENTRY — Saisies carburant
+// ─────────────────────────────────────────────────────────────────
+
+model FuelEntry {
+  id                 String   @id @default(cuid())
+  vehicleId          String
+  agencyId           String
+  date               DateTime
+  fuelType           FuelType
+  liters             Float    @default(0)
+  pricePerLiter      Float    @default(0)
+  totalCost          Float
+  mileageAtFill      Int
+  distanceSinceLast  Int      @default(0)
+  consumption        Float?   // L/100km, null pour électrique
+  station            String?
+  driverName         String?
+  cardNumber         String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  agency  Agency  @relation(fields: [agencyId], references: [id])
+
+  @@index([vehicleId])
+  @@index([agencyId])
+  @@index([date])
+  @@index([fuelType])
+  @@map("fuel_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// TCO ENTRY — Coût total de possession par véhicule
+// ─────────────────────────────────────────────────────────────────
+
+model TCOEntry {
+  id                 String  @id @default(cuid())
+  vehicleId          String  @unique
+  agencyId           String
+  monthlyLease       Float   @default(0)
+  monthlyFuel        Float   @default(0)
+  monthlyMaintenance Float   @default(0)
+  monthlyInsurance   Float   @default(0)
+  monthlyOther       Float   @default(0)
+  totalMonthlyCost   Float   @default(0)
+  annualCost         Float   @default(0)
+  costPerKm          Float   @default(0)
+  mileage            Int     @default(0)
+  updatedAt          DateTime @updatedAt
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+
+  @@index([agencyId])
+  @@map("tco_entries")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// ALERT — Alertes de conformité
+// ─────────────────────────────────────────────────────────────────
+
+model Alert {
+  id                  String        @id @default(cuid())
+  vehicleId           String
+  agencyId            String
+  type                String        // libellé libre : "Contrôle technique", "ARS", etc.
+  category            AlertCategory
+  severity            AlertSeverity
+  status              AlertStatus   @default(OPEN)
+  message             String
+  description         String
+  dueDate             DateTime?
+  resolvedAt          DateTime?
+  resolvedBy          String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  // Relations
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  agency  Agency  @relation(fields: [agencyId], references: [id])
+
+  @@index([vehicleId])
+  @@index([agencyId])
+  @@index([status])
+  @@index([severity])
+  @@index([category])
+  @@map("alerts")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// COMPLIANCE SCORE — Score de conformité par agence
+// ─────────────────────────────────────────────────────────────────
+
+model ComplianceScore {
+  id               String   @id @default(cuid())
+  agencyId         String
+  globalScore      Int      @default(100)
+  arsScore         Int      @default(100)
+  ctScore          Int      @default(100)
+  insuranceScore   Int      @default(100)
+  equipmentScore   Int      @default(100)
+  openAlerts       Int      @default(0)
+  criticalAlerts   Int      @default(0)
+  resolvedAlerts   Int      @default(0)
+  calculatedAt     DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  agency Agency @relation(fields: [agencyId], references: [id])
+
+  @@index([agencyId])
+  @@map("compliance_scores")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// APP SETTINGS — Configuration globale de l'application
+// ─────────────────────────────────────────────────────────────────
+
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
