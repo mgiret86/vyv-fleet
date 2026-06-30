@@ -19,6 +19,14 @@ import dashboardRouter  from './routes/dashboard'
 import rolesRouter      from './routes/roles'
 import settingsRouter   from './routes/settings'
 import vehicleImportRouter from './routes/vehicles.import'
+import vehicleCategoriesRouter from './routes/vehicle-categories'
+import maintenanceTemplatesRouter    from './routes/maintenanceTemplates'
+import vehicleContractsRouter       from './routes/vehicle-contracts'
+import amortizationsRouter          from './routes/amortizations'
+import tcoRouter                    from './routes/tco'
+import substitutionsRouter          from './routes/substitutions'
+import relaisRouter                 from './routes/relais'
+import registrationRouter           from './routes/registration'
 import { scheduleAlertGeneration } from './jobs/alertsGenerator'
 
 const app  = express()
@@ -63,6 +71,14 @@ app.use('/api/users',       usersRouter)
 app.use('/api/dashboard',   dashboardRouter)
 app.use('/api/roles',       rolesRouter)
 app.use('/api/settings',   settingsRouter)
+app.use('/api/vehicle-categories', vehicleCategoriesRouter)
+app.use('/api/maintenance-cycles',   maintenanceTemplatesRouter)
+app.use('/api/vehicle-contracts',   vehicleContractsRouter)
+app.use('/api/amortizations',       amortizationsRouter)
+app.use('/api/tco',                 tcoRouter)
+app.use('/api/relais',          relaisRouter)
+app.use('/api/registration',       registrationRouter)
+app.use('/api/substitutions',       substitutionsRouter)
 app.use('/uploads',        express.static('public/uploads'))
 
 // ── 404 ───────────────────────────────────────────────────────

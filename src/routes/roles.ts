@@ -8,7 +8,7 @@ import { z } from 'zod'
 const router = Router()
 router.use(requireAuth)
 
-const MODULES = ['dashboard','vehicles','maintenance','compliance','incidents','drivers','fuel','equipment','settings'] as const
+const MODULES = ['dashboard','vehicles','maintenance','compliance','incidents','drivers','fuel','equipment','settings','finance','substitutions','relais'] as const
 const ACTIONS = ['view','create','edit','delete'] as const
 
 const roleSchema = z.object({

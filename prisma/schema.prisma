@@ -15,15 +15,6 @@ datasource db {
 // ENUMS
 // ─────────────────────────────────────────────────────────────────
 
-enum VehicleCategory {
-  AMBULANCE_A
-  AMBULANCE_B
-  VSL
-  TPMR
-  TAXI
-  SERVICE
-}
-
 enum VehicleStatus {
   ACTIVE
   MAINTENANCE
@@ -138,6 +129,9 @@ enum AppModule {
   fuel
   equipment
   settings
+  finance
+  substitutions
+  relais
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -166,9 +160,12 @@ model Agency {
   equipment          Equipment[]
   fuelEntries        FuelEntry[]
   alerts             Alert[]
-  complianceScores   ComplianceScore[]
+  complianceScores        ComplianceScore[]
+  substitutionsIncoming   VehicleSubstitution[] @relation("SubstitutionIncomingAgency")
 
   @@index([isActive])
+  relaisDepots    RelaisDepot[]
+
   @@map("agencies")
 }
 
@@ -225,11 +222,14 @@ model User {
   // Relations
   role         Role         @relation(fields: [roleId], references: [id])
   agencies     UserAgency[]
-  refreshTokens RefreshToken[]
+  refreshTokens        RefreshToken[]
+  substitutionsCreated VehicleSubstitution[] @relation("SubstitutionCreatedBy")
 
   @@index([email])
   @@index([roleId])
   @@index([deletedAt])
+  relaisMissions      RelaisMission[] @relation("RelaisMissionCreatedBy")
+
   @@map("users")
 }
 
@@ -269,7 +269,8 @@ model Vehicle {
   registration              String          @unique // Immatriculation
   brand                     String
   model                     String
-  category                  VehicleCategory
+  categoryId                String
+  category                  VehicleCategory @relation(fields: [categoryId], references: [id])
   energy                    Energy
   agencyId                  String
   mileage                   Int             @default(0)
@@ -281,10 +282,18 @@ model Vehicle {
   nextMaintenanceDate       DateTime?
   complianceScore           Int             @default(100)
   status                    VehicleStatus   @default(ACTIVE)
+  isRelais                  Boolean         @default(false)  // Vehicule de remplacement temporaire
   firstRegistrationDate     DateTime?       // 1ere immatriculation (carte grise)
   entryDate                 DateTime?       // Entree dans le parc
   exitDate                  DateTime?       // Sortie du parc
   
+  color                     String?         // Couleur du vehicule
+  vin                       String?         // Numero de serie VIN
+  nationalGenre             String?         // Genre national
+  co2Emission               Float?          // Emission CO2 g/km
+  seatingCapacity           Int?            // Nombre de places
+  imeiPda                   String?         // IMEI du PDA
+  imeiTelematics            String?         // IMEI du boitier telematique
   deletedAt                 DateTime?       // soft delete
   createdAt                 DateTime        @default(now())
   updatedAt                 DateTime        @updatedAt
@@ -300,10 +309,21 @@ model Vehicle {
 
   @@index([agencyId])
   @@index([status])
-  @@index([category])
+  @@index([categoryId])
   @@index([deletedAt])
   @@index([insuranceExpiry])
   @@index([technicalInspectionExpiry])
+  contracts               VehicleContract[]
+  amortizations           Amortization[]
+  maintenanceAssignments  MaintenanceAssignment[]
+  substitutionsIncoming   VehicleSubstitution[] @relation("SubstitutionIncoming")
+  substitutionsOutgoing   VehicleSubstitution[] @relation("SubstitutionOutgoing")
+
+  relaisDepotId            String?
+  relaisDepot              RelaisDepot?    @relation("RelaisVehicleDepot", fields: [relaisDepotId], references: [id])
+  relaisMissions           RelaisMission[] @relation("RelaisVehicle")
+  relaisReplacedMissions   RelaisMission[] @relation("ReplacedVehicle")
+
   @@map("vehicles")
 }
 
@@ -328,9 +348,20 @@ model Driver {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
+  // Champs étendus
+  address                  String?
+  contractType             String?   // CDI | CDD | INTERIM | OTHER
+  deaExpiry                DateTime?
+  fspExpiry                DateTime?
+  medicalCertificateExpiry DateTime?
+  nextTrainingDate         DateTime?
+  totalMileage             Int       @default(0)
+
   // Relations
-  agency    Agency     @relation(fields: [agencyId], references: [id])
-  incidents DriverIncident[]
+  agency         Agency               @relation(fields: [agencyId], references: [id])
+  incidents      DriverIncident[]
+  habilitations  DriverHabilitation[]
+  alerts         Alert[]
 
   @@index([agencyId])
   @@index([status])
@@ -432,7 +463,7 @@ model DriverIncident {
 
 model Equipment {
   id                  String            @id @default(cuid())
-  vehicleId           String
+  vehicleId           String?
   agencyId            String
   label               String
   category            EquipmentCategory
@@ -448,7 +479,7 @@ model Equipment {
   updatedAt           DateTime          @updatedAt
 
   // Relations
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
   agency  Agency  @relation(fields: [agencyId], references: [id])
 
   @@index([vehicleId])
@@ -482,7 +513,7 @@ model FuelEntry {
   updatedAt          DateTime @updatedAt
 
   // Relations
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
   agency  Agency  @relation(fields: [agencyId], references: [id])
 
   @@index([vehicleId])
@@ -512,7 +543,7 @@ model TCOEntry {
   updatedAt          DateTime @updatedAt
 
   // Relations
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
 
   @@index([agencyId])
   @@map("tco_entries")
@@ -524,7 +555,8 @@ model TCOEntry {
 
 model Alert {
   id                  String        @id @default(cuid())
-  vehicleId           String
+  vehicleId           String?
+  driverId            String?
   agencyId            String
   type                String        // libellé libre : "Contrôle technique", "ARS", etc.
   category            AlertCategory
@@ -539,7 +571,8 @@ model Alert {
   updatedAt           DateTime      @updatedAt
 
   // Relations
-  vehicle Vehicle @relation(fields: [vehicleId], references: [id])
+  vehicle Vehicle? @relation(fields: [vehicleId], references: [id])
+  driver  Driver?  @relation(fields: [driverId],  references: [id])
   agency  Agency  @relation(fields: [agencyId], references: [id])
 
   @@index([vehicleId])
@@ -547,6 +580,7 @@ model Alert {
   @@index([status])
   @@index([severity])
   @@index([category])
+  @@index([driverId])
   @@map("alerts")
 }
 
@@ -586,3 +620,330 @@ model AppSetting {
 
   @@map("app_settings")
 }
+
+// CONTRATS DE FINANCEMENT VEHICULE
+
+enum VehicleContractType {
+  CREDIT_BAIL
+  LOA
+  LLD
+  CREDIT_BANCAIRE
+  EN_PROPRIETE
+}
+
+enum ContractStatus {
+  DRAFT
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+model VehicleContract {
+  id                   String              @id @default(uuid())
+  vehicleId            String
+  vehicle              Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  type                 VehicleContractType
+  status               ContractStatus      @default(ACTIVE)
+  isActive             Boolean             @default(true)
+  lessorName           String              @default("")
+  contractRef          String              @default("")
+  startDate            DateTime
+  endDate              DateTime?
+  durationMonths       Int                 @default(0)
+  monthlyRentHT        Float               @default(0)
+  deposit              Float               @default(0)
+  residualValue        Float?
+  startMileage         Int?
+  contractedKmPerYear  Int?
+  contractedKmTotal    Int?
+  excessKmCostPerKm    Float?
+  monthlyInsuranceCost Float?
+  includedServices     Json                @default("{\"maintenance\":false,\"tires\":false,\"insurance\":false,\"assistance\":false}")
+  notes                String?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  @@index([vehicleId])
+  @@map("vehicle_contracts")
+}
+
+// AMORTISSEMENTS
+
+enum AmortizationSource {
+  CREDIT_BAIL
+  MAINTENANCE
+}
+
+enum AmortizationStatus {
+  ACTIVE
+  CLOSED
+}
+
+model Amortization {
+  id             String             @id @default(uuid())
+  vehicleId      String
+  vehicle        Vehicle            @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  source         AmortizationSource
+  sourceId       String
+  reference      String
+  label          String
+  amount         Float
+  startDate      DateTime
+  durationMonths Int
+  status         AmortizationStatus @default(ACTIVE)
+  closedAt       DateTime?
+  entries        Json               @default("[]")
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  @@index([vehicleId])
+  @@index([sourceId])
+  @@map("amortizations")
+}
+
+// CATEGORIES DE VEHICULE (parametrables)
+
+model VehicleCategory {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  label     String
+  color     String    @default("gray")
+  vatRate   Float     @default(20)
+  order     Int       @default(0)
+  isActive  Boolean   @default(true)
+  isSystem  Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  vehicles  Vehicle[]
+
+  @@map("vehicle_categories")
+}
+
+// TEMPLATES DE MAINTENANCE
+
+enum MaintenanceTriggerType {
+  TIME_ONLY
+  KM_ONLY
+  HYBRID
+}
+
+model MaintenanceTemplate {
+  id                   String                    @id @default(cuid())
+  name                 String
+  description          String?
+  type                 MaintenanceType
+  triggerType          MaintenanceTriggerType
+  triggerKm            Int?
+  triggerDays          Int?
+  estimatedCost        Float?
+  applicableCategories String[]
+  isMandatory          Boolean                   @default(false)
+  checklist            MaintenanceChecklistItem[]
+  assignments          MaintenanceAssignment[]
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+
+  @@map("maintenance_templates")
+}
+
+model MaintenanceChecklistItem {
+  id         String              @id @default(cuid())
+  templateId String
+  template   MaintenanceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  label      String
+  order      Int                 @default(0)
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+
+  @@index([templateId])
+  @@map("maintenance_checklist_items")
+}
+
+model MaintenanceAssignment {
+  id              String              @id @default(cuid())
+  vehicleId       String
+  vehicle         Vehicle             @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  templateId      String
+  template        MaintenanceTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  isActive        Boolean             @default(true)
+  lastDoneDate    DateTime?
+  lastDoneMileage Int?
+  nextDueDate     DateTime?
+  nextDueMileage  Int?
+  assignedAt      DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@unique([vehicleId, templateId])
+  @@index([vehicleId])
+  @@index([templateId])
+  @@map("maintenance_assignments")
+}
+
+// ─── Habilitations conducteurs ────────────────────────────────────────────────
+model DriverHabilitation {
+  id          String   @id @default(cuid())
+  driverId    String
+  type        String   // DEA | FSP | PERMIS | CERTIFICAT_MEDICAL | OTHER
+  issuedDate  DateTime?
+  expiryDate  DateTime?
+  status      String   @default("VALID") // VALID | EXPIRED | PENDING
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  driver Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  @@index([driverId])
+  @@index([expiryDate])
+  @@map("driver_habilitations")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// VEHICLE SUBSTITUTION — Mouvements de véhicules
+// ─────────────────────────────────────────────────────────────────
+
+enum SubstitutionStatus {
+  DRAFT
+  COMPLETED
+  CANCELLED
+}
+
+enum SubstitutionVehicleType {
+  AMBULANCE
+  VSL
+  TAXI
+  TPMR
+  TRANSPORT_PERSONNES
+}
+
+model VehicleSubstitution {
+  id            String   @id @default(cuid())
+  effectiveDate DateTime
+
+  // ── Véhicule entrant ──
+  incomingVehicleId       String
+  incomingVehicle         Vehicle  @relation("SubstitutionIncoming", fields: [incomingVehicleId], references: [id])
+  incomingAgencyId        String
+  incomingAgency          Agency   @relation("SubstitutionIncomingAgency", fields: [incomingAgencyId], references: [id])
+  incomingAlias           String?
+  incomingVehicleType     SubstitutionVehicleType
+  incomingTaxiConventionAM Boolean @default(false)
+
+  // Déclarations réglementaires (entrant)
+  axaNotified             Boolean  @default(false)
+  arsDeclaration          Boolean  @default(false)
+  amsReceived             Boolean  @default(false)
+  adsDeclaration          Boolean  @default(false)
+  adsNumber               String?
+  adsMunicipality         String?
+
+  // ── Véhicule sortant ──
+  outgoingVehicleId       String
+  outgoingVehicle         Vehicle  @relation("SubstitutionOutgoing", fields: [outgoingVehicleId], references: [id])
+  outgoingAlias           String?
+  outgoingVehicleType     SubstitutionVehicleType
+  outgoingMileage         Int
+
+  // Équipements sortant (source de vérité)
+  hasFuelCard             Boolean  @default(false)
+  dkvReplacement          Boolean  @default(false)
+  tollDevice              Boolean  @default(false)
+  tollDeviceNumber        String?
+  geolocDevice            Boolean  @default(false)
+  geolocImei              String?
+  pdaDevice               Boolean  @default(false)
+  pdaImei                 String?
+
+  // Transferts vers entrant (optionnels)
+  incomingFuelCard        Boolean  @default(false)
+  incomingDkv             Boolean  @default(false)
+  incomingTollDevice      Boolean  @default(false)
+  incomingGeolocDevice    Boolean  @default(false)
+  incomingGeolocImei      String?
+  incomingPdaDevice       Boolean  @default(false)
+  incomingPdaImei         String?
+
+  // État du véhicule sortant
+  returnReportByEmail     Boolean  @default(false)
+  returnReportDate        DateTime?
+  bodyCondition           String?
+  sanitaryCellCondition   String?
+  interiorCondition       String?
+  mechanicalCondition     String?
+  additionalCosts         String?
+  isDriveable             Boolean  @default(true)
+  vehicleLocation         String?
+
+  // Suivi
+  status                  SubstitutionStatus @default(DRAFT)
+  createdById             String
+  createdBy               User     @relation("SubstitutionCreatedBy", fields: [createdById], references: [id])
+  notes                   String?
+
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@index([incomingVehicleId])
+  @@index([outgoingVehicleId])
+  @@index([incomingAgencyId])
+  @@index([effectiveDate])
+  @@index([status])
+  @@map("vehicle_substitutions")
+}
+
+// ─────────────────────────────────────────────────────────────────
+// RELAIS — Véhicules de remplacement temporaire
+// ─────────────────────────────────────────────────────────────────
+
+enum RelaisMissionStatus {
+  PLANNED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model RelaisDepot {
+  id          String   @id @default(cuid())
+  name        String
+  address     String?
+  city        String?
+  zipCode     String?
+  phone       String?
+  capacity    Int      @default(1)
+  agencyId    String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agency      Agency?        @relation(fields: [agencyId], references: [id])
+  vehicles    Vehicle[]      @relation("RelaisVehicleDepot")
+  missions    RelaisMission[]
+
+  @@index([agencyId])
+  @@map("relais_depots")
+}
+
+model RelaisMission {
+  id                String              @id @default(cuid())
+  relaisVehicleId   String
+  replacedVehicleId String
+  depotId           String?
+  startDate         DateTime
+  estimatedEndDate  DateTime?
+  endDate           DateTime?
+  status            RelaisMissionStatus @default(PLANNED)
+  reason            String?
+  notes             String?
+  createdById       String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  relaisVehicle     Vehicle  @relation("RelaisVehicle",   fields: [relaisVehicleId],   references: [id])
+  replacedVehicle   Vehicle  @relation("ReplacedVehicle", fields: [replacedVehicleId], references: [id])
+  depot             RelaisDepot? @relation(fields: [depotId], references: [id])
+  createdBy         User     @relation("RelaisMissionCreatedBy", fields: [createdById], references: [id])
+
+  @@index([relaisVehicleId])
+  @@index([replacedVehicleId])
+  @@index([status])
+  @@index([startDate])
+  @@map("relais_missions")
+}
+

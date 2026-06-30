@@ -1,4 +1,5 @@
 import { Router, type Response } from 'express'
+import { recomputeTCO } from './tco'
 import { prisma } from '../lib/prisma'
 import { requireAuth } from '../middlewares/auth'
 import { ok, created, noContent, badRequest, notFound, serverError } from '../lib/response'
@@ -61,6 +62,24 @@ router.put('/:id', async (req: AuthRequest, res: Response) => {
   if (!parsed.success) return badRequest(res, parsed.error.message)
   try {
     const m = await prisma.maintenance.update({ where: { id: req.params.id }, data: parsed.data as never, include: { vehicle: true, agency: true } })
+
+    // Recalcul TCO automatique si la maintenance passe à COMPLETED
+    if (parsed.data.status === 'COMPLETED' && m.vehicleId) {
+      try {
+        const tcoData = await recomputeTCO(m.vehicleId)
+        if (tcoData) {
+          await prisma.tCOEntry.upsert({
+            where:  { vehicleId: m.vehicleId },
+            create: tcoData,
+            update: tcoData,
+          })
+        }
+      } catch (tcoErr) {
+        console.error('[TCO] Recalcul automatique échoué :', tcoErr)
+        // Non bloquant : on retourne quand même la maintenance mise à jour
+      }
+    }
+
     return ok(res, m)
   } catch { return notFound(res) }
 })
